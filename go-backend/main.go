@@ -49,7 +49,7 @@ type CrawlerConfig struct {
 
 
 var dbPool *pgxpool.Pool
-var meiliClient *meilisearch.Client // Meilisearch client
+var meiliClient meilisearch.ServiceManager // Meilisearch client
 var configMutex sync.Mutex // Mutex để bảo vệ việc đọc/ghi file config
 
 // Đường dẫn đến file config trong container (nhất quán)
@@ -110,10 +110,7 @@ func main() {
 	}
 	meiliKey := os.Getenv("MEILI_API_KEY") // Can be empty for local dev
 
-	meiliClient = meilisearch.NewClient(meilisearch.ClientConfig{
-		Host:   meiliHost,
-		APIKey: meiliKey,
-	})
+	meiliClient = meilisearch.New(meiliHost, meilisearch.WithAPIKey(meiliKey))
 
 	// Kiểm tra kết nối tới Meilisearch (optional but good practice)
 	if _, err := meiliClient.Health(); err != nil {
@@ -167,9 +164,15 @@ func searchHandler(c echo.Context) error {
 	// Chuyển đổi kết quả
 	results := []SearchResult{}
 	for _, hit := range searchRes.Hits {
-		// Ép kiểu hit về map[string]interface{} để xử lý
-		hitMap, ok := hit.(map[string]interface{})
-		if !ok {
+		// Convert meilisearch.Hit (map[string]json.RawMessage) to map[string]interface{}
+		var hitMap map[string]interface{}
+		hitJSON, err := json.Marshal(hit)
+		if err != nil {
+			log.Printf("Error marshalling hit: %v", err)
+			continue
+		}
+		if err := json.Unmarshal(hitJSON, &hitMap); err != nil {
+			log.Printf("Error unmarshalling hit: %v", err)
 			continue
 		}
 
