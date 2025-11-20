@@ -19,6 +19,9 @@ CREATE TABLE IF NOT EXISTS crawled_pages (
     -- Detected language code (e.g., 'en', 'vi')
     language VARCHAR(10),
 
+    -- Meilisearch sync timestamp
+    indexed_at TIMESTAMPTZ,
+
     -- Full-text search vector
     tsv_document TSVECTOR
 );

@@ -50,6 +50,25 @@ services:
       timeout: 20s
       retries: 3
 
+  # Meilisearch: Công cụ tìm kiếm mới
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    restart: always
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:-aSampleMasterKey}
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - meili_data:/meili_data
+    ports:
+      - "7700:7700"
+    networks:
+      - teaser_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 5s
+      timeout: 1s
+      retries: 30
+
 
   # --- 2. DỊCH VỤ ỨNG DỤNG (Go và Python) ---
   
@@ -98,10 +117,49 @@ services:
     networks:
       - teaser_net
 
+  # Indexer Worker (Python): Đồng bộ Postgres -> Meilisearch
+  indexer_worker:
+    build:
+      context: .
+      dockerfile: indexer/Dockerfile.Indexer
+    restart: on-failure
+    # command: python indexer.py # CMD đã có trong Dockerfile
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-teaser_user}:${POSTGRES_PASSWORD:-teaser_pass}@postgres:5432/${POSTGRES_DB:-teaser_db}
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_API_KEY: ${MEILI_MASTER_KEY:-aSampleMasterKey}
+    volumes:
+       # Mount thư mục indexer để live-reload
+      - ./indexer:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+    networks:
+      - teaser_net
+
+  # Dashboard Frontend (Next.js)
+  dashboard:
+    build:
+      context: ./dashboard-frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    networks:
+      - teaser_net
+    environment:
+      - NEXT_PUBLIC_API_BASE_URL=http://backend:8080
+    # Live reload by mounting the source code
+    # NOTE: node_modules is excluded via .dockerignore
+    volumes:
+      - ./dashboard-frontend:/app
+
 # --- 3. VOLUMES và NETWORKS ---
 volumes:
   postgres_data:
   minio_data:
+  meili_data:
 
 networks:
   teaser_net:

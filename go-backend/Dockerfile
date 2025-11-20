@@ -7,7 +7,7 @@ WORKDIR /app
 # Điều này giúp tận dụng cache. Docker sẽ chỉ chạy lại bước 3
 # nếu 2 file này thay đổi.
 COPY go.mod .
-COPY go.sum .  
+COPY go.sum .
 
 # 2. Tải dependencies dựa trên file go.sum
 RUN go mod download

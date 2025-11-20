@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/meilisearch/meilisearch-go"
 )
 
 // Struct để chứa kết quả tìm kiếm
@@ -48,6 +49,7 @@ type CrawlerConfig struct {
 
 
 var dbPool *pgxpool.Pool
+var meiliClient meilisearch.ServiceManager // Meilisearch client
 var configMutex sync.Mutex // Mutex để bảo vệ việc đọc/ghi file config
 
 // Đường dẫn đến file config trong container (nhất quán)
@@ -101,6 +103,23 @@ func main() {
 
 	log.Println("Successfully connected to PostgreSQL!")
 
+	// --- Khởi tạo Meilisearch Client ---
+	meiliHost := os.Getenv("MEILI_HOST")
+	if meiliHost == "" {
+		meiliHost = "http://meilisearch:7700" // Default for Docker Compose
+	}
+	meiliKey := os.Getenv("MEILI_API_KEY") // Can be empty for local dev
+
+	meiliClient = meilisearch.New(meiliHost, meilisearch.WithAPIKey(meiliKey))
+
+	// Kiểm tra kết nối tới Meilisearch (optional but good practice)
+	if _, err := meiliClient.Health(); err != nil {
+		log.Printf("Warning: Could not connect to Meilisearch: %v\n", err)
+	} else {
+		log.Println("Successfully connected to Meilisearch!")
+	}
+	// ------------------------------------
+
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
@@ -116,44 +135,92 @@ func main() {
 	e.Logger.Fatal(e.Start(":8080"))
 }
 
-// searchHandler: Xử lý logic tìm kiếm Full-Text Search
+// searchHandler: Xử lý logic tìm kiếm bằng Meilisearch
 func searchHandler(c echo.Context) error {
 	query := c.QueryParam("q")
 	if query == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "query parameter 'q' is required"})
 	}
 
-	sqlQuery := `
-		SELECT 
-			url, 
-			title, 
-			meta_description, 
-			ts_headline('english', body_text, to_tsquery('english', $1), 'StartSel=<b>,StopSel=</b>') as snippet 
-		FROM 
-			crawled_pages 
-		WHERE 
-			tsv_document @@ to_tsquery('english', $1) 
-		ORDER BY 
-			ts_rank(tsv_document, to_tsquery('english', $1)) DESC 
-		LIMIT 20;
-	`
+	// Cấu hình yêu cầu tìm kiếm
+	searchRequest := &meilisearch.SearchRequest{
+		Limit:                20,
+		AttributesToRetrieve: []string{"url", "title", "meta_description", "body_text"}, // Lấy cả body_text để snippet
+		AttributesToHighlight: []string{"*"}, // Highlight tất cả các thuộc tính
+		HighlightPreTag:      "<b>",
+		HighlightPostTag:     "</b>",
+		AttributesToCrop:     []string{"body_text"},
+		CropLength:           15,
+		CropMarker:           "...",
+	}
 
-	rows, err := dbPool.Query(context.Background(), sqlQuery, query)
+	// Thực hiện tìm kiếm
+	searchRes, err := meiliClient.Index("pages").Search(query, searchRequest)
 	if err != nil {
-		log.Printf("Query failed: %v\n", err)
+		log.Printf("Meilisearch query failed: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "search failed"})
 	}
-	defer rows.Close()
 
+	// Chuyển đổi kết quả
 	results := []SearchResult{}
-	for rows.Next() {
-		var res SearchResult
-		if err := rows.Scan(&res.URL, &res.Title, &res.MetaDesc, &res.Snippet); err != nil {
-			log.Printf("Row scan failed: %v\n", err)
+	for _, hit := range searchRes.Hits {
+		// Convert meilisearch.Hit (map[string]json.RawMessage) to map[string]interface{}
+		var hitMap map[string]interface{}
+		hitJSON, err := json.Marshal(hit)
+		if err != nil {
+			log.Printf("Error marshalling hit: %v", err)
 			continue
 		}
+		if err := json.Unmarshal(hitJSON, &hitMap); err != nil {
+			log.Printf("Error unmarshalling hit: %v", err)
+			continue
+		}
+
+		res := SearchResult{}
+
+		// Lấy các trường thông thường
+		if url, ok := hitMap["url"].(string); ok {
+			res.URL = url
+		}
+		if title, ok := hitMap["title"].(string); ok {
+			res.Title = title
+		}
+		if meta, ok := hitMap["meta_description"].(string); ok {
+			res.MetaDesc = meta
+		}
+
+		// Xử lý Snippet và Highlight
+		var finalSnippet string
+		if formatted, ok := hitMap["_formatted"].(map[string]interface{}); ok {
+			// Ưu tiên highlight title nếu có
+			if hTitle, ok := formatted["title"].(string); ok {
+				res.Title = hTitle
+			}
+			// Ưu tiên snippet từ Meilisearch
+			if hSnippet, ok := formatted["body_text"].(string); ok {
+				finalSnippet = hSnippet
+			}
+		}
+
+		// Nếu không có highlight, thử lấy snippet
+		if finalSnippet == "" {
+			if snippet, ok := hitMap["_snippet"].(map[string]interface{}); ok {
+				if sBody, ok := snippet["body_text"].(string); ok {
+					finalSnippet = sBody
+				}
+			}
+		}
+
+		// Nếu vẫn không có, dùng meta description
+		if finalSnippet == "" {
+			finalSnippet = res.MetaDesc
+		}
+
+
+		res.Snippet = finalSnippet
 		results = append(results, res)
 	}
+
 
 	return c.JSON(http.StatusOK, results)
 }
