@@ -11,61 +11,62 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # --- 2. Tải biến môi trường ---
 load_dotenv()
 
-# --- 3. Lấy thông tin kết nối từ biến môi trường ---
+# --- 3. Config ---
 DATABASE_URL = os.getenv("DATABASE_URL")
 MEILI_HOST = os.getenv("MEILI_HOST")
 MEILI_API_KEY = os.getenv("MEILI_API_KEY")
 INDEX_NAME = "pages"
-BATCH_SIZE = 1000 # Số lượng documents xử lý mỗi lần
-SLEEP_INTERVAL = 30 # Giây
+BATCH_SIZE = 1000
+SLEEP_INTERVAL = 30
 
-# --- 4. Logic chính của Indexer ---
+# --- 4. Logic chính ---
 async def main():
-    """Hàm chính chạy vòng lặp vô tận để đồng bộ dữ liệu."""
-
-    # --- 4.1. Khởi tạo kết nối ---
     db_pool = None
     meili_client = None
 
     try:
         logging.info("Đang kết nối tới PostgreSQL...")
         db_pool = await asyncpg.create_pool(DATABASE_URL)
-        logging.info("Kết nối PostgreSQL thành công.")
-
+        
         logging.info(f"Đang kết nối tới Meilisearch tại {MEILI_HOST}...")
         meili_client = meilisearch.aio.Client(url=MEILI_HOST, api_key=MEILI_API_KEY)
-        logging.info("Kết nối Meilisearch thành công.")
 
-        # --- 4.2. Khởi tạo Index và Cài đặt ---
+        # --- Khởi tạo Index & Cấu hình Ranking ---
         logging.info(f"Đang khởi tạo index '{INDEX_NAME}'...")
         await meili_client.create_index(INDEX_NAME, {'primaryKey': 'url'})
 
-        logging.info("Đang cập nhật cài đặt cho index...")
+        logging.info("Đang cập nhật cài đặt Lith Rank cho index...")
         settings = {
             'searchableAttributes': ['title', 'body_text', 'meta_description'],
             'filterableAttributes': ['domain', 'language'],
-            'sortableAttributes': ['crawled_at']
+            # QUAN TRỌNG: Thêm lith_score vào sortableAttributes
+            'sortableAttributes': ['crawled_at', 'lith_score'],
+            # Cấu hình Ranking Rules mặc định (Lith score cao -> lên top)
+            'rankingRules': [
+                'words',
+                'typo',
+                'proximity',
+                'attribute',
+                'sort',
+                'exactness',
+                'lith_score:desc' 
+            ]
         }
         await meili_client.index(INDEX_NAME).update_settings(settings)
-        logging.info("Cài đặt index đã được cập nhật.")
+        logging.info("Cài đặt index đã được cập nhật với Lith Rank.")
 
     except Exception as e:
-        logging.critical(f"Lỗi nghiêm trọng khi khởi tạo: {e}")
-        # Nếu không thể kết nối DB hoặc Meili, thoát luôn
-        if db_pool:
-            await db_pool.close()
-        # Không cần đóng meili_client vì nó không có hàm close() async
+        logging.critical(f"Lỗi khởi tạo: {e}")
+        if db_pool: await db_pool.close()
         return
 
-    # --- 4.3. Vòng lặp đồng bộ ---
     logging.info("Bắt đầu vòng lặp đồng bộ...")
     while True:
         try:
             async with db_pool.acquire() as connection:
-
-                # B1: Lấy các trang chưa được index hoặc đã cũ
+                # Lấy thêm lith_score từ DB
                 query = f"""
-                    SELECT id, url, title, meta_description, body_text, domain, language, crawled_at
+                    SELECT id, url, title, meta_description, body_text, domain, language, crawled_at, lith_score
                     FROM crawled_pages
                     WHERE indexed_at IS NULL OR crawled_at > indexed_at
                     LIMIT {BATCH_SIZE};
@@ -73,41 +74,30 @@ async def main():
                 records = await connection.fetch(query)
 
                 if not records:
-                    logging.info(f"Không có trang mới cần index. Đang ngủ {SLEEP_INTERVAL} giây...")
+                    logging.info(f"Không có trang mới. Ngủ {SLEEP_INTERVAL}s...")
                     await asyncio.sleep(SLEEP_INTERVAL)
                     continue
 
                 logging.info(f"Tìm thấy {len(records)} trang cần index.")
-
-                # B2: Chuyển đổi dữ liệu
                 documents_batch = [dict(record) for record in records]
 
-                # B3: Gửi dữ liệu lên Meilisearch
-                logging.info(f"Đang gửi {len(documents_batch)} documents lên Meilisearch...")
-                task = await meili_client.index(INDEX_NAME).add_documents(documents_batch)
-                # Chờ Meilisearch xác nhận (không bắt buộc, nhưng tốt cho logging)
-                # await meili_client.wait_for_task(task.task_uid)
-                logging.info(f"Gửi batch thành công. Task UID: {task.task_uid}")
+                # Xử lý dữ liệu: Đảm bảo lith_score có giá trị mặc định nếu NULL
+                for doc in documents_batch:
+                    if doc.get('lith_score') is None:
+                        doc['lith_score'] = 1.0
+                    # Convert datetime to timestamp for Meilisearch sorting if needed (optional)
+                    if doc.get('crawled_at'):
+                        doc['crawled_at'] = doc['crawled_at'].timestamp()
 
-
-                # B4: Cập nhật lại Postgres
+                await meili_client.index(INDEX_NAME).add_documents(documents_batch)
+                
                 indexed_ids = [record['id'] for record in records]
-                update_query = """
-                    UPDATE crawled_pages
-                    SET indexed_at = NOW()
-                    WHERE id = ANY($1::bigint[]);
-                """
-                await connection.execute(update_query, indexed_ids)
-                logging.info(f"Đã cập nhật indexed_at cho {len(indexed_ids)} bản ghi trong Postgres.")
+                await connection.execute("UPDATE crawled_pages SET indexed_at = NOW() WHERE id = ANY($1::bigint[])", indexed_ids)
+                logging.info(f"Đã index {len(indexed_ids)} trang.")
 
-        except asyncpg.exceptions.UndefinedTableError:
-             logging.warning("Bảng 'crawled_pages' chưa tồn tại hoặc cột 'indexed_at' bị thiếu. Đang chờ crawler tạo bảng...")
-             await asyncio.sleep(SLEEP_INTERVAL)
         except Exception as e:
-            logging.error(f"Lỗi trong vòng lặp đồng bộ: {e}")
-            logging.info(f"Sẽ thử lại sau {SLEEP_INTERVAL} giây...")
+            logging.error(f"Lỗi vòng lặp: {e}")
             await asyncio.sleep(SLEEP_INTERVAL)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

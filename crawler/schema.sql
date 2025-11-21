@@ -38,3 +38,19 @@ CREATE INDEX IF NOT EXISTS domain_idx ON crawled_pages (domain);
 -- Index for language-based queries
 CREATE INDEX IF NOT EXISTS lang_idx ON crawled_pages (language);
 
+-- --- Bổ sung cho Lith Ranker ---
+
+-- 1. Bảng lưu trữ các liên kết (Graph Edges)
+-- Ghi lại: "Source URL" trỏ tới "Target URL"
+CREATE TABLE IF NOT EXISTS page_links (
+    source_url VARCHAR(2048) NOT NULL,
+    target_url VARCHAR(2048) NOT NULL,
+    PRIMARY KEY (source_url, target_url)
+);
+
+-- Index để truy vấn nhanh khi Lith load graph
+CREATE INDEX IF NOT EXISTS source_url_idx ON page_links (source_url);
+CREATE INDEX IF NOT EXISTS target_url_idx ON page_links (target_url);
+
+-- 2. Thêm cột điểm Lith (ranking score) vào bảng chính
+ALTER TABLE crawled_pages ADD COLUMN IF NOT EXISTS lith_score FLOAT DEFAULT 1.0;

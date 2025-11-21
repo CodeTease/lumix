@@ -155,6 +155,23 @@ services:
     volumes:
       - ./dashboard-frontend:/app
 
+    # Dịch vụ mới: Lith Ranker (Thuật toán xếp hạng độc lập)
+  lith_ranker:
+    build:
+      context: ./lith-ranker # Đường dẫn tới thư mục code Lith
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # Kết nối tới cùng database với Crawler và Backend
+      DATABASE_URL: postgresql://${POSTGRES_USER:-teaser_user}:${POSTGRES_PASSWORD:-teaser_pass}@postgres:5432/${POSTGRES_DB:-teaser_db}
+      LITH_INTERVAL_MINUTES: 60  # Tính toán lại mỗi 60 phút
+      LITH_MAX_ITERATIONS: 20    # Số lần lặp để hội tụ
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - teaser_net
+
 # --- 3. VOLUMES và NETWORKS ---
 volumes:
   postgres_data:
