@@ -142,7 +142,7 @@ func searchHandler(c echo.Context) error {
 
 	searchRequest := &meilisearch.SearchRequest{
 		Limit:                20,
-		AttributesToRetrieve: []string{"url", "title", "meta_description", "body_text", "lith_score"},
+		AttributesToRetrieve: []string{"url", "title", "meta_description", "lith_score"},
 		AttributesToHighlight: []string{"*"},
 		HighlightPreTag:      "<b>",
 		HighlightPostTag:     "</b>",

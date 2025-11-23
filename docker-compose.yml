@@ -85,9 +85,8 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_access_key}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
     volumes:
-      # SỬA LỖI QUAN TRỌNG: Mount toàn bộ thư mục gốc vào /app
-      # Giờ đây backend và crawler nhìn thấy chính xác cùng một hệ thống file
-      - ./:/app:rw 
+      # Mount thư mục mã nguồn Go vào /app
+      - ./go-backend:/app:rw
     ports:
       - "8080:8080"
     depends_on:
@@ -108,7 +107,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minio_access_key}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minio_secret_key}
     volumes:
-      # Mount toàn bộ thư mục gốc (Giống hệt backend)
+      # Mount thư mục gốc vào /app cho crawler
       - ./:/app
     depends_on:
       - postgres

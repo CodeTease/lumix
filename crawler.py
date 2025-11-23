@@ -239,8 +239,15 @@ class WebCrawler:
         if not self.save_to_db or not self.db_pool:
             return
 
+        # Move data to local scope and clear immediately to prevent race conditions
+        local_db_batch = list(self.db_batch)
+        self.db_batch.clear()
+
+        local_link_batch = list(self.link_batch)
+        self.link_batch.clear()
+
         # 1. Flush Pages
-        if self.db_batch:
+        if local_db_batch:
             try:
                 async with self.db_pool.acquire() as conn:
                     data_to_insert = [
@@ -253,7 +260,7 @@ class WebCrawler:
                             p.get('body_text', ''),
                             p.get('raw_html_path'),
                             p.get('language', 'unknown')
-                        ) for p in self.db_batch
+                        ) for p in local_db_batch
                     ]
                     await conn.executemany('''
                         INSERT INTO crawled_pages (url, title, meta_description, domain, depth, body_text, raw_html_path, language, tsv_document)
@@ -264,21 +271,19 @@ class WebCrawler:
                             language = EXCLUDED.language,
                             crawled_at = CURRENT_TIMESTAMP
                     ''', data_to_insert)
-                self.db_batch.clear()
             except Exception as e:
                 console.print(f"[red]Error flushing pages: {e}[/red]")
 
         # 2. Flush Links (Graph Data) - New for Lith Ranker
-        if self.link_batch:
+        if local_link_batch:
             try:
                 async with self.db_pool.acquire() as conn:
                     await conn.executemany('''
                         INSERT INTO page_links (source_url, target_url)
                         VALUES ($1, $2)
                         ON CONFLICT (source_url, target_url) DO NOTHING
-                    ''', self.link_batch)
-                self.stats['links_recorded'] += len(self.link_batch)
-                self.link_batch.clear()
+                    ''', local_link_batch)
+                self.stats['links_recorded'] += len(local_link_batch)
             except Exception as e:
                 console.print(f"[red]Error flushing links: {e}[/red]")
         

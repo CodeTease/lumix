@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -19,12 +20,14 @@ const (
 )
 
 // Page đại diện cho một trang web trong đồ thị
+// Optimized: Uses int64 ID instead of string URL to save RAM
 type Page struct {
-	URL        string
-	LinksOut   int                 // Số lượng link đi ra
-	Score      float64             // Điểm Lith hiện tại
-	NewScore   float64             // Điểm Lith tạm thời trong vòng lặp
-	LinksInURL map[string]struct{} // Danh sách các trang trỏ đến trang này
+	ID       int64
+	URL      string // Still keep URL for reference if needed, but not as map key
+	LinksOut int    // Số lượng link đi ra
+	Score    float64
+	NewScore float64
+	LinksIn  []int64 // List of IDs pointing to this page (replacing map[string]struct{})
 }
 
 func main() {
@@ -78,7 +81,7 @@ func runLithCycle(pool *pgxpool.Pool, maxIter int) {
 	log.Println("--- Starting Lith Rank Calculation Cycle ---")
 	start := time.Now()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute) // Increased timeout for heavy tasks
 	defer cancel()
 
 	if err := calculateLithRank(ctx, pool, maxIter); err != nil {
@@ -91,7 +94,7 @@ func runLithCycle(pool *pgxpool.Pool, maxIter int) {
 
 // calculateLithRank thực hiện thuật toán PageRank
 func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) error {
-	// B1: Tải đồ thị từ DB vào RAM
+	// B1: Tải đồ thị từ DB vào RAM (Optimized)
 	pages, err := loadGraph(ctx, pool)
 	if err != nil {
 		return err
@@ -117,8 +120,8 @@ func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) err
 	for i := 0; i < maxIter; i++ {
 		for _, p := range pages {
 			incomingScore := 0.0
-			for sourceURL := range p.LinksInURL {
-				if sourcePage, ok := pages[sourceURL]; ok && sourcePage.LinksOut > 0 {
+			for _, sourceID := range p.LinksIn {
+				if sourcePage, ok := pages[sourceID]; ok && sourcePage.LinksOut > 0 {
 					incomingScore += sourcePage.Score / float64(sourcePage.LinksOut)
 				}
 			}
@@ -131,24 +134,32 @@ func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) err
 		}
 	}
 
-	// B4: Lưu kết quả xuống DB
+	// B4: Lưu kết quả xuống DB (Optimized with Temp Table)
 	return saveScores(ctx, pool, pages)
 }
 
-func loadGraph(ctx context.Context, pool *pgxpool.Pool) (map[string]*Page, error) {
-	pages := make(map[string]*Page)
+func loadGraph(ctx context.Context, pool *pgxpool.Pool) (map[int64]*Page, error) {
+	pages := make(map[int64]*Page)
+	urlToID := make(map[string]int64)
 
 	// Lấy danh sách các trang (Nodes)
-	rows, err := pool.Query(ctx, "SELECT url FROM crawled_pages")
+	// Fetch ID as well
+	rows, err := pool.Query(ctx, "SELECT id, url FROM crawled_pages")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		var id int64
 		var url string
-		if err := rows.Scan(&url); err == nil {
-			pages[url] = &Page{URL: url, LinksInURL: make(map[string]struct{})}
+		if err := rows.Scan(&id, &url); err == nil {
+			pages[id] = &Page{
+				ID:      id,
+				URL:     url,
+				LinksIn: []int64{},
+			}
+			urlToID[url] = id
 		}
 	}
 
@@ -162,38 +173,70 @@ func loadGraph(ctx context.Context, pool *pgxpool.Pool) (map[string]*Page, error
 	for linkRows.Next() {
 		var source, target string
 		if err := linkRows.Scan(&source, &target); err == nil {
-			// Nếu cả 2 trang đều tồn tại trong tập dữ liệu crawl
-			if srcPage, ok := pages[source]; ok {
-				if tgtPage, ok := pages[target]; ok {
+			// Resolve URLs to IDs
+			srcID, srcOk := urlToID[source]
+			tgtID, tgtOk := urlToID[target]
+
+			if srcOk && tgtOk {
+				if srcPage, ok := pages[srcID]; ok {
 					srcPage.LinksOut++
-					tgtPage.LinksInURL[source] = struct{}{}
+				}
+				if tgtPage, ok := pages[tgtID]; ok {
+					tgtPage.LinksIn = append(tgtPage.LinksIn, srcID)
 				}
 			}
 		}
 	}
 
+	// urlToID map will be garbage collected after this function returns
 	return pages, nil
 }
 
-func saveScores(ctx context.Context, pool *pgxpool.Pool, pages map[string]*Page) error {
+func saveScores(ctx context.Context, pool *pgxpool.Pool, pages map[int64]*Page) error {
+	// Must use a transaction to ensure the temporary table persists across commands
 	tx, err := pool.Begin(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	batch := &pgx.Batch{}
+	// Create a temporary table
+	_, err = tx.Exec(ctx, "CREATE TEMP TABLE lith_scores_temp (id BIGINT, score FLOAT) ON COMMIT DROP")
+	if err != nil {
+		return fmt.Errorf("creating temp table: %w", err)
+	}
+
+	// Prepare data for COPY
+	rows := [][]interface{}{}
 	for _, p := range pages {
-		// Queue câu lệnh update
-		batch.Queue("UPDATE crawled_pages SET lith_score = $1 WHERE url = $2", p.Score, p.URL)
+		rows = append(rows, []interface{}{p.ID, p.Score})
 	}
 
-	br := tx.SendBatch(ctx, batch)
-	defer br.Close()
+	// Bulk Insert into Temp Table using COPY
+	count, err := tx.CopyFrom(
+		ctx,
+		pgx.Identifier{"lith_scores_temp"},
+		[]string{"id", "score"},
+		pgx.CopyFromRows(rows),
+	)
+	if err != nil {
+		return fmt.Errorf("copying to temp table: %w", err)
+	}
+	log.Printf("Copied %d rows to temp table.", count)
 
-	if _, err := br.Exec(); err != nil {
-		return err
+	// Single UPDATE from Temp Table
+	// Using FROM clause to update efficiently
+	updateQuery := `
+		UPDATE crawled_pages
+		SET lith_score = t.score
+		FROM lith_scores_temp t
+		WHERE crawled_pages.id = t.id
+	`
+	cmdTag, err := tx.Exec(ctx, updateQuery)
+	if err != nil {
+		return fmt.Errorf("updating main table: %w", err)
 	}
 
+	log.Printf("Updated %d rows in crawled_pages.", cmdTag.RowsAffected())
 	return tx.Commit(ctx)
 }
