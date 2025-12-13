@@ -1,32 +1,13 @@
 name: Python Services
 
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      crawler: ${{ steps.filter.outputs.crawler }}
-      indexer: ${{ steps.filter.outputs.indexer }}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dorny/paths-filter@v3
-      id: filter
-      with:
-        filters: |
-          crawler:
-            - 'crawler/**'
-            - '*.py'
-          indexer:
-            - 'indexer/**'
-
   lint-crawler:
-    needs: changes
-    if: ${{ needs.changes.outputs.crawler == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['crawler/**', '*.py']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Lint Crawler
     runs-on: ubuntu-latest
     defaults:
@@ -52,8 +33,12 @@ jobs:
         flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
 
   lint-indexer:
-    needs: changes
-    if: ${{ needs.changes.outputs.indexer == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['indexer/**']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Lint Indexer
     runs-on: ubuntu-latest
     defaults:

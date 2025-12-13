@@ -1,31 +1,13 @@
 name: Go Services
 
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      backend: ${{ steps.filter.outputs.backend }}
-      ranker: ${{ steps.filter.outputs.ranker }}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dorny/paths-filter@v3
-      id: filter
-      with:
-        filters: |
-          backend:
-            - 'go-backend/**'
-          ranker:
-            - 'lith-ranker/**'
-
   build-backend:
-    needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['go-backend/**']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Build Go Backend
     runs-on: ubuntu-latest
     defaults:
@@ -52,8 +34,12 @@ jobs:
       run: go test -v ./...
 
   build-lith-ranker:
-    needs: changes
-    if: ${{ needs.changes.outputs.ranker == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['lith-ranker/**']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Build Lith Ranker
     runs-on: ubuntu-latest
     defaults:

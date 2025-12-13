@@ -1,31 +1,13 @@
 name: Node.js Services
 
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      dashboard: ${{ steps.filter.outputs.dashboard }}
-      renderer: ${{ steps.filter.outputs.renderer }}
-    steps:
-    - uses: actions/checkout@v4
-    - uses: dorny/paths-filter@v3
-      id: filter
-      with:
-        filters: |
-          dashboard:
-            - 'dashboard-frontend/**'
-          renderer:
-            - 'js-renderer/**'
-
   build-dashboard:
-    needs: changes
-    if: ${{ needs.changes.outputs.dashboard == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['dashboard-frontend/**']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Build Dashboard Frontend
     runs-on: ubuntu-latest
     defaults:
@@ -37,7 +19,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '22' # Next.js yêu cầu Node >=20.9.0
+        node-version: '22' # Next.js mới nhất yêu cầu Node >=20.9.0
         cache: 'npm'
         cache-dependency-path: dashboard-frontend/package-lock.json
 
@@ -52,8 +34,12 @@ jobs:
       run: npm run build
 
   check-js-renderer:
-    needs: changes
-    if: ${{ needs.changes.outputs.renderer == 'true' }}
+    on:
+      push:
+        branches: [ "main", "master" ]
+        paths: ['js-renderer/**']
+      pull_request:
+        branches: [ "main", "master" ]
     name: Check JS Renderer
     runs-on: ubuntu-latest
     defaults:
@@ -65,7 +51,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '18'
+        node-version: '22' # Để chắc chắn thì dùng Node 22
 
     - name: Install dependencies
       run: npm install
