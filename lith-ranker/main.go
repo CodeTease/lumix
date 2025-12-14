@@ -13,11 +13,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// --- Cấu Hình Lith Rank ---
+// --- Lith Rank Config ---
 const (
-	DampingFactor        = 0.85 // Xác suất người dùng tiếp tục click
-	DefaultMaxIterations = 20   // Số vòng lặp để tính điểm
-	DefaultInterval      = 60   // Phút (Mặc định tính lại mỗi tiếng)
+	DampingFactor        = 0.85 // Probability of user continuing to click
+	DefaultMaxIterations = 20   // Number of iterations for score calculation
+	DefaultInterval      = 60   // Minutes (Default recalculation every hour)
 )
 
 // CompactGraph optimizes memory usage using parallel arrays (Struct of Arrays)
@@ -73,7 +73,7 @@ func (g *CompactGraph) AddNode(id int64, textLength int, crawledAt time.Time) {
 func main() {
 	log.Println("Lith Ranker: Starting up...")
 
-	// 1. Lấy cấu hình từ biến môi trường
+	// 1. Get config from environment variables
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
 		log.Fatal("FATAL: DATABASE_URL is required.")
@@ -93,7 +93,7 @@ func main() {
 		}
 	}
 
-	// 2. Kết nối Database
+	// 2. Connect to Database
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
 		log.Fatalf("FATAL: Cannot connect to DB: %v", err)
@@ -101,15 +101,15 @@ func main() {
 	defer pool.Close()
 	log.Println("Lith Ranker: Connected to PostgreSQL.")
 
-	// 3. Chờ một chút để Crawler chạy trước (nếu khởi động cùng lúc)
+	// 3. Wait a bit for Crawler to start (if started simultaneously)
 	log.Println("Lith Ranker: Warming up (30s)...")
 	time.Sleep(30 * time.Second)
 
-	// 4. Vòng lặp chính
+	// 4. Main Loop
 	ticker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
 	defer ticker.Stop()
 
-	// Chạy ngay lần đầu tiên
+	// Run immediately first time
 	runLithCycle(pool, maxIter)
 
 	for range ticker.C {
@@ -132,9 +132,9 @@ func runLithCycle(pool *pgxpool.Pool, maxIter int) {
 	log.Println("--- Cycle Finished ---")
 }
 
-// calculateLithRank thực hiện thuật toán PageRank
+// calculateLithRank executes the PageRank algorithm
 func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) error {
-	// B1: Tải đồ thị từ DB vào RAM (Optimized)
+	// S1: Load graph from DB to RAM (Optimized)
 	graph, err := loadGraph(ctx, pool)
 	if err != nil {
 		return err
@@ -147,14 +147,14 @@ func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) err
 	}
 	log.Printf("Graph loaded: %d pages.", count)
 
-	// B2: Khởi tạo điểm số ban đầu (1.0 / N)
+	// S2: Initialize initial score (1.0 / N)
 	initialScore := 1.0 / float64(count)
 	for i := 0; i < count; i++ {
 		graph.Scores[i] = initialScore
 	}
 
-	// B3: Lặp để tính toán (The core algorithm)
-	// Công thức: PR(A) = (1-d)/N + d * Sum(PR(B)/L(B))
+	// S3: Iteration for calculation (The core algorithm)
+	// Formula: PR(A) = (1-d)/N + d * Sum(PR(B)/L(B))
 	baseScore := (1.0 - DampingFactor) / float64(count)
 
 	for iter := 0; iter < maxIter; iter++ {
@@ -197,7 +197,7 @@ func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) err
 		graph.Scores[i] = (graph.Scores[i] * 0.8) + (freshness * 0.1) + (depthIndex * 0.1)
 	}
 
-	// B4: Lưu kết quả xuống DB (Optimized with Temp Table)
+	// S4: Save results to DB (Optimized with Temp Table)
 	return saveScores(ctx, pool, graph)
 }
 
@@ -209,9 +209,22 @@ func loadGraph(ctx context.Context, pool *pgxpool.Pool) (*CompactGraph, error) {
 		count = 10000 // Fallback
 	}
 
+	// Fail-safe: Check against Max Node Limit to prevent OOM on massive graphs
+	// Default limit 5 million nodes if not set.
+	maxNodes := 5000000
+	if val := os.Getenv("LITH_MAX_NODES"); val != "" {
+		if i, err := strconv.Atoi(val); err == nil && i > 0 {
+			maxNodes = i
+		}
+	}
+
+	if count > maxNodes {
+		return nil, fmt.Errorf("graph size (%d) exceeds safety limit (%d). aborting to prevent OOM", count, maxNodes)
+	}
+
 	graph := NewCompactGraph(count)
 
-	// Lấy danh sách các trang (Nodes)
+	// Fetch list of pages (Nodes)
 	// Only fetch strictly necessary fields.
 	rows, err := pool.Query(ctx, "SELECT id, COALESCE(text_length, 0), COALESCE(crawled_at, CURRENT_TIMESTAMP) FROM crawled_pages")
 	if err != nil {
@@ -233,7 +246,7 @@ func loadGraph(ctx context.Context, pool *pgxpool.Pool) (*CompactGraph, error) {
 		return nil, err
 	}
 
-	// Lấy danh sách liên kết (Edges)
+	// Fetch list of links (Edges)
 	// Optimized: Direct query on page_links using IDs
 	linkQuery := `SELECT source_id, target_id FROM page_links`
 

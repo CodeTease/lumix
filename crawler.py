@@ -14,7 +14,7 @@ import hashlib
 import io
 from typing import Set, Dict, List, Optional, Tuple
 
-# --- NÂNG CẤP THƯ VIỆN ---
+# --- LIBRARIES UPGRADE ---
 import redis.asyncio as redis
 import fasttext 
 from rich.console import Console
@@ -31,7 +31,7 @@ console = Console()
 
 
 class RobotsCache:
-    """Quản lý việc cache file robots.txt."""
+    """Manages robots.txt caching."""
     def __init__(self):
         self.cache: Dict[str, RobotFileParser] = {}
         self.session: Optional[aiohttp.ClientSession] = None
@@ -108,7 +108,7 @@ class WebCrawler:
         self.db_pool: Optional[asyncpg.Pool] = None
         self.minio_client: Optional[Minio] = None
         
-        # Tải model FastText
+        # Load FastText model
         self.lang_detector = self._init_language_detector()
         
         self.rate_limiter = AsyncLimiter(config.get('max_requests_per_minute', 60), 60)
@@ -125,21 +125,21 @@ class WebCrawler:
         }
     
     def _init_language_detector(self):
-        """Tải model FastText khi crawler khởi động."""
+        """Loads FastText model on crawler startup."""
         model_path = "/app/lid.176.bin"
         if not os.path.exists(model_path):
-            console.print(f"[bold red]Lỗi: Model nhận diện ngôn ngữ '{model_path}' không tồn tại.[/bold red]")
+            console.print(f"[bold red]Error: Language detection model '{model_path}' does not exist.[/bold red]")
             return None
         try:
             detector = fasttext.load_model(model_path)
-            console.print("[green]✓ Model FastText cho Crawler đã được tải.[/green]")
+            console.print("[green]✓ FastText model for Crawler loaded.[/green]")
             return detector
         except Exception as e:
-            console.print(f"[red]Không thể tải model FastText: {e}[/red]")
+            console.print(f"[red]Could not load FastText model: {e}[/red]")
             return None
 
     async def _init_redis(self):
-        """Khởi tạo kết nối Redis."""
+        """Initializes Redis connection."""
         redis_host = os.environ.get('REDIS_HOST', 'redis')
         redis_port = int(os.environ.get('REDIS_PORT', 6379))
         try:
@@ -151,7 +151,7 @@ class WebCrawler:
             raise e
 
     async def _init_database(self):
-        """Khởi tạo kết nối DB Pool và đảm bảo schema được áp dụng."""
+        """Initializes DB Pool and ensures schema is applied."""
         if not self.save_to_db:
             return
         
@@ -182,7 +182,7 @@ class WebCrawler:
                     await conn.execute(schema_sql)
                  console.print("[green]✓ Database initialized successfully[/green]")
             else:
-                 console.print(f"[bold red]Lỗi: Không tìm thấy schema.sql tại {schema_path}.[/bold red]")
+                 console.print(f"[bold red]Error: schema.sql not found at {schema_path}.[/bold red]")
                  self.save_to_db = False
             
             # Apply link migration if needed
@@ -261,7 +261,7 @@ class WebCrawler:
             return None
             
     async def _flush_db_batch(self):
-        """Ghi lô dữ liệu pages và links vào database."""
+        """Flushes batches of pages and links to database."""
         if not self.save_to_db or not self.db_pool:
             return
 
@@ -341,7 +341,7 @@ class WebCrawler:
                 console.print(f"[red]Error flushing links: {e}[/red]")
         
     async def _add_to_db_batch(self, page_data: Dict, outgoing_links: List[str]):
-        """Thêm dữ liệu vào lô xử lý."""
+        """Adds data to the processing batch."""
         if not self.save_to_db: return
 
         self.db_batch.append(page_data)

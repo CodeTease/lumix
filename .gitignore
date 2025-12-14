@@ -3,10 +3,13 @@
 venv/
 lith-ranker/lith-ranker
 
-# Vegh files
+# Vegh files (CodeTease's Snapshot tool)
 *.vegh 
 .veghcache
-.veghhooks.json
+# PyVegh's Vegh Hooks configuration file
+.veghhooks.json 
+# Old Vegh files extension, but kept for backward compatibility
+*.snap
 
 # Node
 node_modules/

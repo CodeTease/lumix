@@ -11,6 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Thiết lập thư mục làm việc
 WORKDIR /app
 
+# Tải model FastText từ Teaserverse Public Asset
+RUN apt-get update && apt-get install -y wget && \
+    wget -O /app/lid.176.bin https://cdn.teaserverse.online/codetease/lumix/lid.176.bin && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
 # Copy các file config và requirements trước
 COPY crawler/requirements.txt .
 COPY crawler/schema.sql .
@@ -25,6 +30,6 @@ COPY crawler/config.json .
 COPY crawler/.gitignore .
 
 # Lệnh mặc định để chạy crawler
-# crawler.py của bạn đã có logic chờ (init_database),
+# crawler.py đã có logic chờ (init_database),
 # nhưng nó sẽ chạy ngay khi container khởi động.
 CMD ["python", "crawler.py"]

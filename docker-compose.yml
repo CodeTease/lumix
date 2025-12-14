@@ -1,8 +1,8 @@
 version: '3.8'
 
-# --- 1. DỊCH VỤ HẠ TẦNG (Database, Queue, Storage) ---
+# --- 1. INFRASTRUCTURE SERVICES (Database, Queue, Storage) ---
 services:
-  # PostgreSQL: Nơi lưu trữ chỉ mục (Full-Text Search)
+  # PostgreSQL: Stores index (Full-Text Search)
   postgres:
     image: postgres:16-alpine
     restart: always
@@ -23,7 +23,7 @@ services:
     networks:
       - teaser_net
 
-  # Redis/Valkey: Hàng đợi (Queue)
+  # Redis/Valkey: Queue
   redis:
     image: redis:7-alpine
     restart: always
@@ -32,7 +32,7 @@ services:
     # ports:
     #   - "6379:6379"
 
-  # MinIO (Optional S3 Storage): Lưu trữ Raw HTML
+  # MinIO (Optional S3 Storage): Stores Raw HTML
   minio:
     image: quay.io/minio/minio:latest
     restart: always
@@ -53,7 +53,7 @@ services:
       timeout: 20s
       retries: 3
 
-  # Meilisearch: Công cụ tìm kiếm mới
+  # Meilisearch: Search Engine
   meilisearch:
     image: getmeili/meilisearch:latest
     restart: always
@@ -73,7 +73,7 @@ services:
       retries: 30
 
 
-  # --- 2. DỊCH VỤ ỨNG DỤNG (Go và Python) ---
+  # --- 2. APPLICATION SERVICES (Go and Python) ---
   
   # Dashboard Backend (Go): API/Search Logic/Management
   backend:
@@ -89,7 +89,7 @@ services:
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     volumes:
-      # Mount thư mục mã nguồn Go vào /app
+      # Mount Go source code to /app
       - ./go-backend:/app:rw
       # Share config with crawler
       - crawler_config:/app/crawler
@@ -101,7 +101,7 @@ services:
     networks:
       - teaser_net
 
-  # Crawler (Python): Thu thập và Làm giàu Dữ liệu
+  # Crawler (Python): Data Collection and Enrichment
   crawler:
     build: 
       context: . 
@@ -113,7 +113,7 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     volumes:
-      # Mount thư mục gốc vào /app cho crawler
+      # Mount root directory to /app for crawler
       - ./:/app
       # Ensure config path is consistent
       - crawler_config:/app/crawler
@@ -124,19 +124,19 @@ services:
     networks:
       - teaser_net
 
-  # Indexer Worker (Python): Đồng bộ Postgres -> Meilisearch
+  # Indexer Worker (Python): Sync Postgres -> Meilisearch
   indexer_worker:
     build:
       context: .
       dockerfile: indexer/Dockerfile.Indexer
     restart: on-failure
-    # command: python indexer.py # CMD đã có trong Dockerfile
+    # command: python indexer.py # CMD already in Dockerfile
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       MEILI_HOST: http://meilisearch:7700
       MEILI_API_KEY: ${MEILI_MASTER_KEY}
     volumes:
-       # Mount thư mục indexer để live-reload
+       # Mount indexer directory for live-reload
       - ./indexer:/app
     depends_on:
       postgres:
@@ -163,17 +163,22 @@ services:
     # volumes:
     #   - ./dashboard-frontend:/app
 
-    # Dịch vụ mới: Lith Ranker (Thuật toán xếp hạng độc lập)
+  # New Service: Lith Ranker (Independent Ranking Algorithm)
   lith_ranker:
     build:
-      context: ./lith-ranker # Đường dẫn tới thư mục code Lith
+      context: ./lith-ranker # Path to Lith code directory
       dockerfile: Dockerfile
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
     environment:
-      # Kết nối tới cùng database với Crawler và Backend
+      # Connect to same database as Crawler and Backend
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      LITH_INTERVAL_MINUTES: 60  # Tính toán lại mỗi 60 phút
-      LITH_MAX_ITERATIONS: 20    # Số lần lặp để hội tụ
+      LITH_INTERVAL_MINUTES: 60  # Recalculate every 60 minutes
+      LITH_MAX_ITERATIONS: 20    # Number of iterations to converge
     depends_on:
       postgres:
         condition: service_healthy
@@ -186,12 +191,17 @@ services:
       context: ./js-renderer
       dockerfile: Dockerfile
     restart: on-failure
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2G
     ports:
       - "8888:8888"
     networks:
       - teaser_net
 
-# --- 3. VOLUMES và NETWORKS ---
+# --- 3. VOLUMES and NETWORKS ---
 volumes:
   postgres_data:
   minio_data:

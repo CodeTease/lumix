@@ -7,12 +7,16 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"github.com/meilisearch/meilisearch-go"
+	"golang.org/x/time/rate"
 )
 
 // SearchResult struct
@@ -21,7 +25,7 @@ type SearchResult struct {
 	Title     string  `json:"title"`
 	Snippet   string  `json:"snippet"`
 	MetaDesc  string  `json:"meta_description"`
-	LithScore float64 `json:"lith_score"` // Hiển thị điểm số Lith
+	LithScore float64 `json:"lith_score"` // Display Lith score
 }
 
 var dbPool *pgxpool.Pool
@@ -58,7 +62,7 @@ func main() {
 
 	// --- Enforce Ranking Rules on Startup ---
 	go func() {
-		// Chờ Meili khởi động
+		// Wait for Meili to start
 		for i := 0; i < 5; i++ {
 			if _, err := meiliClient.Health(); err == nil {
 				log.Println("Configuring Meilisearch Ranking Rules for Lith Ranker...")
@@ -83,6 +87,11 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
+
+	// Rate Limiting (20 requests per second)
+	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStoreWithConfig(
+		middleware.RateLimiterMemoryStoreConfig{Rate: rate.Limit(20), Burst: 50, ExpiresIn: 3 * time.Minute},
+	)))
 
 	// Configurable CORS
 	allowedOrigins := []string{"*"}
@@ -123,7 +132,22 @@ func main() {
 
 	e.Static("/", "/app/go-backend/static")
 
-	e.Logger.Fatal(e.Start(":8080"))
+	// Graceful Shutdown
+	go func() {
+		if err := e.Start(":8080"); err != nil && err != http.ErrServerClosed {
+			e.Logger.Fatal("shutting down the server")
+		}
+	}()
+
+	// Wait for interrupt signal to gracefully shutdown the server with a timeout of 10 seconds.
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := e.Shutdown(ctx); err != nil {
+		e.Logger.Fatal(err)
+	}
 }
 
 func initConfigTable(pool *pgxpool.Pool) error {
