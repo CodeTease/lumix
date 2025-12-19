@@ -10,3 +10,4 @@ lxml
 aiodns
 numpy==1.24.4
 redis
+prometheus_client

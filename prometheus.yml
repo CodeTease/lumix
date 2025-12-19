@@ -1,0 +1,35 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'backend'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['backend:8080']
+
+  - job_name: 'crawler'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['crawler:8000']
+
+  - job_name: 'indexer'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['indexer_worker:8001']
+
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  - job_name: 'meilisearch'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['meilisearch:7700']
+
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']

@@ -9,12 +9,18 @@ from minio import Minio
 from bs4 import BeautifulSoup
 import io
 import time
+import threading
+from prometheus_client import start_http_server, Gauge, Counter
 
 # --- 1. Logging configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- 2. Load environment variables ---
 load_dotenv()
+
+# --- METRICS ---
+INDEXING_QUEUE_DEPTH = Gauge('indexing_queue_depth', 'Pages waiting to be indexed')
+INDEXED_PAGES = Counter('indexed_pages_total', 'Total pages indexed')
 
 # --- 3. Config ---
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -138,6 +144,13 @@ async def cleanup_deleted_pages(db_pool, meili_client):
         logging.error(f"Error during cleanup: {e}")
 
 async def main():
+    # Start Prometheus Metrics Server
+    try:
+        threading.Thread(target=start_http_server, args=(8001,), daemon=True).start()
+        logging.info("Prometheus metrics server started on port 8001")
+    except Exception as e:
+        logging.error(f"Failed to start metrics server: {e}")
+
     db_pool = None
     meili_client = None
     minio_client = None
@@ -211,6 +224,13 @@ async def main():
         try:
             # 1. Indexing Task
             async with db_pool.acquire() as connection:
+                # Update Queue Depth Metric
+                try:
+                    queue_count = await connection.fetchval("SELECT COUNT(*) FROM crawled_pages WHERE indexed_at IS NULL OR crawled_at > indexed_at")
+                    INDEXING_QUEUE_DEPTH.set(queue_count)
+                except Exception as e:
+                    logging.warning(f"Failed to update queue depth metric: {e}")
+
                 query = f"""
                     SELECT id, url, title, meta_description, raw_html_path, domain, language, crawled_at, lith_score
                     FROM crawled_pages
@@ -220,7 +240,7 @@ async def main():
                 records = await connection.fetch(query)
 
                 if records:
-                    logging.info(f"Found {len(records)} pages to index.")
+                    logging.info(f"Found {len(records)} pages to index. Queue depth: {queue_count}")
                     documents_batch = []
                     
                     for record in records:
@@ -264,6 +284,7 @@ async def main():
                     indexed_ids = [record['id'] for record in records]
                     await connection.execute("UPDATE crawled_pages SET indexed_at = NOW() WHERE id = ANY($1::bigint[])", indexed_ids)
                     logging.info(f"Indexed {len(indexed_ids)} pages.")
+                    INDEXED_PAGES.inc(len(indexed_ids))
                 else:
                     # No new pages, maybe good time to cleanup or sleep
                     pass

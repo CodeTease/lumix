@@ -73,6 +73,7 @@ services:
     environment:
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       MEILI_NO_ANALYTICS: "true"
+      MEILI_EXPERIMENTAL_ENABLE_METRICS: "true" # Enable metrics
     volumes:
       - meili_data:/meili_data
     # ports:
@@ -135,6 +136,8 @@ services:
       - ./:/app
       # Ensure config path is consistent
       - crawler_config:/app/crawler
+    ports:
+      - "8000:8000" # Metrics
     depends_on:
       postgres:
         condition: service_healthy
@@ -161,6 +164,8 @@ services:
     volumes:
        # Mount indexer directory for live-reload
       - ./indexer:/app
+    ports:
+      - "8001:8001" # Metrics
     depends_on:
       postgres:
         condition: service_healthy
@@ -228,7 +233,51 @@ services:
     networks:
       - teaser_net
 
-# --- 3. VOLUMES and NETWORKS ---
+  # --- 3. OBSERVABILITY SERVICES ---
+  
+  prometheus:
+    image: prom/prometheus:latest
+    restart: always
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - teaser_net
+
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - teaser_net
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter
+    restart: always
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+    networks:
+      - teaser_net
+
+  redis-exporter:
+    image: oliver006/redis_exporter
+    restart: always
+    environment:
+      REDIS_ADDR: redis:6379
+    networks:
+      - teaser_net
+
+  node-exporter:
+    image: prom/node-exporter
+    restart: always
+    networks:
+      - teaser_net
+
+# --- 4. VOLUMES and NETWORKS ---
 volumes:
   postgres_data:
   minio_data:

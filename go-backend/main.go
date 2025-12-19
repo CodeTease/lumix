@@ -15,6 +15,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"github.com/labstack/echo-contrib/prometheus"
+	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/meilisearch/meilisearch-go"
 	"golang.org/x/time/rate"
 )
@@ -28,8 +30,22 @@ type SearchResult struct {
 	LithScore float64 `json:"lith_score"` // Display Lith score
 }
 
-var dbPool *pgxpool.Pool
-var meiliClient meilisearch.ServiceManager
+var (
+	dbPool      *pgxpool.Pool
+	meiliClient meilisearch.ServiceManager
+
+	// Custom Metrics
+	meiliRequestDuration = prom.NewHistogram(prom.HistogramOpts{
+		Name:    "meilisearch_request_duration_seconds",
+		Help:    "Time spent waiting for Meilisearch results",
+		Buckets: prom.DefBuckets,
+	})
+	lithScoreDistribution = prom.NewHistogram(prom.HistogramOpts{
+		Name:    "lith_score_distribution",
+		Help:    "Distribution of Lith Ranker scores returned to users",
+		Buckets: []float64{0.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0},
+	})
+)
 
 const configKey = "default"
 
@@ -82,6 +98,18 @@ func main() {
 	e := echo.New()
 	e.Use(middleware.Logger())
 	e.Use(middleware.Recover())
+
+	// Prometheus Middleware
+	p := prometheus.NewPrometheus("echo", nil)
+	p.Use(e)
+
+	// Register Custom Metrics
+	if err := prom.Register(meiliRequestDuration); err != nil {
+		log.Printf("Warning: failed to register meiliRequestDuration: %v", err)
+	}
+	if err := prom.Register(lithScoreDistribution); err != nil {
+		log.Printf("Warning: failed to register lithScoreDistribution: %v", err)
+	}
 
 	// Rate Limiting (20 requests per second)
 	e.Use(middleware.RateLimiter(middleware.NewRateLimiterMemoryStoreWithConfig(
@@ -167,7 +195,11 @@ func searchHandler(c echo.Context) error {
 		CropLength:            150,
 	}
 
+	start := time.Now()
 	searchRes, err := meiliClient.Index("pages").Search(query, searchRequest)
+	duration := time.Since(start).Seconds()
+	meiliRequestDuration.Observe(duration)
+
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "search failed"})
 	}
@@ -190,6 +222,7 @@ func searchHandler(c echo.Context) error {
 		}
 		if score, ok := hitMap["lith_score"].(float64); ok {
 			res.LithScore = score
+			lithScoreDistribution.Observe(score)
 		}
 
 		if formatted, ok := hitMap["_formatted"].(map[string]interface{}); ok {

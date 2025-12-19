@@ -13,8 +13,10 @@ import ssl
 import hashlib
 import io
 from typing import Set, Dict, List, Optional, Tuple
+import threading
 
 # --- LIBRARIES UPGRADE ---
+from prometheus_client import start_http_server, Counter
 import redis.asyncio as redis
 import fasttext 
 from rich.console import Console
@@ -28,6 +30,10 @@ from minio.error import S3Error
 from dotenv import load_dotenv
 
 console = Console()
+
+# --- METRICS ---
+PAGES_CRAWLED = Counter('pages_crawled_total', 'Total pages crawled')
+CRAWL_ERRORS = Counter('crawl_errors_total', 'Total crawl errors')
 
 
 class RobotsCache:
@@ -505,8 +511,10 @@ class WebCrawler:
                     self.results.append(page_data)
                     self.stats['total_crawled'] += 1
                     self.stats['by_domain'][self._get_domain(norm_url)]['crawled'] += 1
+                    PAGES_CRAWLED.inc()
             except Exception as e:
                 self.stats['total_errors'] += 1
+                CRAWL_ERRORS.inc()
                 # Retry Logic
                 fails = await self.redis.incr(f"failures:{norm_url}")
                 if fails <= self.max_retries:
@@ -594,6 +602,13 @@ async def load_crawler_config_from_db() -> Dict:
 
 async def main():
     load_dotenv()
+
+    # Start Prometheus Metrics Server
+    try:
+        threading.Thread(target=start_http_server, args=(8000,), daemon=True).start()
+        console.print("[green]✓ Prometheus metrics server started on port 8000[/green]")
+    except Exception as e:
+        console.print(f"[red]Failed to start metrics server: {e}[/red]")
     
     # Default config structure
     default_config = {
