@@ -180,7 +180,7 @@ async def main():
 
         # --- Initialize Index ---
         logging.info(f"Initializing index '{INDEX_NAME}'...")
-        await meili_client.create_index(INDEX_NAME, {'primaryKey': 'url'})
+        await meili_client.create_index(INDEX_NAME, primary_key='url')
 
         logging.info("Updating Lith Rank settings for index...")
         settings = {
