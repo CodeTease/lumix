@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -28,6 +29,16 @@ type SearchResult struct {
 	Snippet   string  `json:"snippet"`
 	MetaDesc  string  `json:"meta_description"`
 	LithScore float64 `json:"lith_score"` // Display Lith score
+}
+
+type FacetResponse struct {
+	Domain   map[string]int64 `json:"domain"`
+	Language map[string]int64 `json:"language"`
+}
+
+type SearchResponse struct {
+	Hits   []SearchResult `json:"hits"`
+	Facets FacetResponse  `json:"facets,omitempty"`
 }
 
 var (
@@ -185,6 +196,24 @@ func searchHandler(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "query param 'q' required"})
 	}
 
+	// Filters
+	filter := ""
+	domainFilter := c.QueryParam("domain")
+	langFilter := c.QueryParam("lang")
+	
+	if domainFilter != "" {
+		// Escape single quotes for Meilisearch filter syntax
+		escapedDomain := strings.ReplaceAll(domainFilter, "'", "\\'")
+		filter = "domain = '" + escapedDomain + "'"
+	}
+	if langFilter != "" {
+		escapedLang := strings.ReplaceAll(langFilter, "'", "\\'")
+		if filter != "" {
+			filter += " AND "
+		}
+		filter += "language = '" + escapedLang + "'"
+	}
+
 	searchRequest := &meilisearch.SearchRequest{
 		Limit:                 20,
 		AttributesToRetrieve:  []string{"url", "title", "meta_description", "lith_score"},
@@ -193,6 +222,14 @@ func searchHandler(c echo.Context) error {
 		HighlightPostTag:      "</b>",
 		AttributesToCrop:      []string{"body_text"},
 		CropLength:            150,
+		Facets:                []string{"domain", "language"},
+		// Hybrid Search (Vector) placeholder. 
+		// Requires an embedding service to generate vectors for the query.
+		// Vector: []float32{...}, 
+	}
+
+	if filter != "" {
+		searchRequest.Filter = filter
 	}
 
 	start := time.Now()
@@ -201,6 +238,7 @@ func searchHandler(c echo.Context) error {
 	meiliRequestDuration.Observe(duration)
 
 	if err != nil {
+		log.Printf("Search Error: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "search failed"})
 	}
 
@@ -237,7 +275,39 @@ func searchHandler(c echo.Context) error {
 		results = append(results, res)
 	}
 
-	return c.JSON(http.StatusOK, results)
+	// Parse facets
+	facets := FacetResponse{
+		Domain:   make(map[string]int64),
+		Language: make(map[string]int64),
+	}
+	
+	if searchRes.FacetDistribution != nil {
+		var facetDist map[string]map[string]interface{}
+		// Unmarshal the RawMessage into a typed map
+		if err := json.Unmarshal(searchRes.FacetDistribution, &facetDist); err == nil {
+			if d, ok := facetDist["domain"]; ok {
+				for k, v := range d {
+					if val, isFloat := v.(float64); isFloat {
+						facets.Domain[k] = int64(val)
+					}
+				}
+			}
+			if l, ok := facetDist["language"]; ok {
+				for k, v := range l {
+					if val, isFloat := v.(float64); isFloat {
+						facets.Language[k] = int64(val)
+					}
+				}
+			}
+		} else {
+			log.Printf("Failed to unmarshal FacetDistribution: %v", err)
+		}
+	}
+
+	return c.JSON(http.StatusOK, SearchResponse{
+		Hits:   results,
+		Facets: facets,
+	})
 }
 
 func getConfigHandler(c echo.Context) error {

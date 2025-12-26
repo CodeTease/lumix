@@ -13,3 +13,6 @@ lith-ranker/lith-ranker
 
 # Node
 node_modules/
+go-backend/vendor
+go-backend/vendor/
+__pycache__/

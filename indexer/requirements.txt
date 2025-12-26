@@ -5,3 +5,5 @@ minio
 beautifulsoup4
 lxml
 prometheus_client
+trafilatura
+textstat

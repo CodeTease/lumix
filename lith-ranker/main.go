@@ -197,46 +197,37 @@ func calculateLithRank(ctx context.Context, pool *pgxpool.Pool, maxIter int) err
 
 	// Update crawled_pages with calculated metrics
 	// Freshness: max(0, 1 - (AgeInDays / 365))
-	// Quality: log10(text_length)
+	// Quality: log10(text_length) + penalty for bad readability (implied in usage)
+	// Domain Authority: Bonus for .gov, .edu
+	// Readability: from DB
 	// Lith Score: Weighted sum
-	_, err = tx.Exec(ctx, `
-		UPDATE crawled_pages cp
-		SET
-			lith_score = res.final_score,
-			freshness_score = res.freshness,
-			quality_score = res.quality
-		FROM (
-			SELECT
-				n.id,
-				GREATEST(0, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(cp.crawled_at, NOW()))) / (86400.0 * 365.0))) as freshness,
-				CASE WHEN cp.text_length > 0 THEN LOG(cp.text_length) ELSE 0 END as quality,
-				n.score as raw_pr
-			FROM pr_nodes n
-			JOIN crawled_pages cp ON n.id = cp.id
-		) res
-		WHERE cp.id = res.id AND (
-             cp.lith_score IS DISTINCT FROM ((res.raw_pr * 0.8) + (res.freshness * 0.1) + (res.quality * 0.1))
-             OR cp.freshness_score IS DISTINCT FROM res.freshness
-             OR cp.quality_score IS DISTINCT FROM res.quality
-        );
-	`)
+	
+	// Note: We use the second query block which seems to be the one active/correct (the first one in original code looked like dead code or failed attempt).
+	// We will update metrics calculation.
 
-	// Retrying the query with correct structure
 	_, err = tx.Exec(ctx, `
 		WITH metrics AS (
 			SELECT
 				n.id,
 				GREATEST(0, 1.0 - (EXTRACT(EPOCH FROM (NOW() - COALESCE(cp.crawled_at, NOW()))) / (86400.0 * 365.0))) as freshness,
 				CASE WHEN cp.text_length > 0 THEN LOG(cp.text_length) ELSE 0 END as quality,
+				COALESCE(cp.readability_score, 0) / 100.0 as readability_norm,
+				CASE 
+					WHEN cp.url LIKE '%.gov%' OR cp.url LIKE '%.gov.%' THEN 1.0
+					WHEN cp.url LIKE '%.edu%' OR cp.url LIKE '%.edu.%' THEN 0.8
+					WHEN cp.url LIKE '%.org%' THEN 0.5
+					ELSE 0.0
+				END as domain_auth,
 				n.score as raw_pr
 			FROM pr_nodes n
 			JOIN crawled_pages cp ON n.id = cp.id
 		)
 		UPDATE crawled_pages cp
 		SET
-			lith_score = (m.raw_pr * 0.8) + (m.freshness * 0.1) + (m.quality * 0.1),
+			lith_score = (m.raw_pr * 0.7) + (m.freshness * 0.1) + (m.quality * 0.1) + (m.readability_norm * 0.05) + (m.domain_auth * 0.05),
 			freshness_score = m.freshness,
-			quality_score = m.quality
+			quality_score = m.quality,
+			domain_score = m.domain_auth
 		FROM metrics m
 		WHERE cp.id = m.id
 	`)

@@ -13,6 +13,8 @@ import io
 import time
 import threading
 from prometheus_client import start_http_server, Gauge, Counter
+import trafilatura
+import textstat
 
 # --- 1. Logging configuration ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,72 +44,41 @@ CLEANUP_INTERVAL_SECONDS = 3600 * 6  # Run cleanup every 6 hours
 # --- 4. Main logic ---
 async def cleanup_deleted_pages(db_pool, meili_client):
     """
-    Sync deletions: Remove documents from MeiliSearch that do not exist in PostgreSQL.
-    Strategy: Iterate MeiliSearch documents in batches and verify existence in DB.
-    This avoids loading all DB IDs into memory (OOM prevention).
+    Sync deletions: Remove documents from MeiliSearch that are marked as deleted in PostgreSQL.
     """
-    logging.info("Starting cleanup phase...")
+    logging.info("Starting cleanup phase (Soft Delete)...")
     try:
-        # Iterate MeiliSearch documents
-        limit = 2000
-        offset = 0
-        deleted_count = 0
-        
-        while True:
-            # Fetch batch of docs from Meili
-            docs = await meili_client.index(INDEX_NAME).get_documents({
-                'limit': limit,
-                'offset': offset,
-                'fields': ['id', 'url'] 
-            })
+        async with db_pool.acquire() as conn:
+            # Find pages that are marked deleted but still think they are indexed
+            rows = await conn.fetch("""
+                SELECT url, id 
+                FROM crawled_pages 
+                WHERE deleted_at IS NOT NULL AND indexed_at IS NOT NULL
+                LIMIT 1000
+            """)
             
-            if not docs.results:
-                break
-            
-            # Extract IDs to check
-            meili_ids = []
-            doc_map = {} # Map ID -> URL (PK)
-            
-            for doc in docs.results:
-                doc_id = doc.get('id')
-                doc_url = doc.get('url')
-                if doc_id is not None and doc_url:
-                    try:
-                        doc_id_int = int(doc_id)
-                        meili_ids.append(doc_id_int)
-                        doc_map[doc_id_int] = doc_url
-                    except ValueError:
-                        pass
-            
-            if not meili_ids:
-                offset += limit
-                continue
+            if not rows:
+                logging.info("No deleted pages found to cleanup.")
+                return
 
-            # Check existence in DB
-            ids_to_delete = []
-            async with db_pool.acquire() as conn:
-                # We want to find which of meili_ids are NOT in the DB.
-                # Query: SELECT id FROM crawled_pages WHERE id = ANY($1)
-                found_rows = await conn.fetch(
-                    "SELECT id FROM crawled_pages WHERE id = ANY($1::bigint[])", 
-                    meili_ids
-                )
-                found_ids = {r['id'] for r in found_rows}
+            urls_to_delete = [r['url'] for r in rows]
+            ids_to_update = [r['id'] for r in rows]
+
+            if urls_to_delete:
+                # Meilisearch uses URL as primary key in our config (see create_index), 
+                # OR does it use 'url' or 'id'?
+                # create_index(INDEX_NAME, primary_key='url') was called in main().
+                # So we delete by URL.
+                await meili_client.index(INDEX_NAME).delete_documents(urls_to_delete)
                 
-                for m_id in meili_ids:
-                    if m_id not in found_ids:
-                        ids_to_delete.append(doc_map[m_id])
+                # Mark as de-indexed in DB so we don't pick them up again
+                await conn.execute("""
+                    UPDATE crawled_pages 
+                    SET indexed_at = NULL 
+                    WHERE id = ANY($1::bigint[])
+                """, ids_to_update)
 
-            if ids_to_delete:
-                await meili_client.index(INDEX_NAME).delete_documents(ids_to_delete)
-                deleted_count += len(ids_to_delete)
-                logging.info(f"Deleted batch of {len(ids_to_delete)} stale documents.")
-            
-            offset += limit
-            # Simple yield to event loop
-            await asyncio.sleep(0.01)
-
-        logging.info(f"Cleanup completed. Deleted {deleted_count} stale documents from MeiliSearch.")
+                logging.info(f"Deleted {len(urls_to_delete)} soft-deleted documents from MeiliSearch.")
 
     except Exception as e:
         logging.error(f"Error during cleanup: {e}")
@@ -207,7 +178,8 @@ async def main():
                 query = f"""
                     SELECT id, url, title, meta_description, raw_html_path, domain, language, crawled_at, lith_score
                     FROM crawled_pages
-                    WHERE indexed_at IS NULL OR crawled_at > indexed_at
+                    WHERE (indexed_at IS NULL OR crawled_at > indexed_at)
+                      AND deleted_at IS NULL
                     LIMIT {BATCH_SIZE};
                 """
                 records = await connection.fetch(query)
@@ -215,6 +187,7 @@ async def main():
                 if records:
                     logging.info(f"Found {len(records)} pages to index. Queue depth: {queue_count}")
                     documents_batch = []
+                    readability_updates = []
                     
                     for record in records:
                         doc = dict(record)
@@ -231,15 +204,29 @@ async def main():
                                 )
                                 try:
                                     content = response.read()
-                                    soup = BeautifulSoup(content, 'lxml')
-                                    for script in soup(["script", "style", "nav", "footer", "header"]):
-                                        script.decompose()
-                                    body_text = soup.get_text(separator=' ', strip=True)[:100000]
+                                    # Use Trafilatura for better extraction
+                                    extracted = trafilatura.extract(content)
+                                    if extracted:
+                                        body_text = extracted[:100000]
+                                    else:
+                                        # Fallback to BeautifulSoup
+                                        soup = BeautifulSoup(content, 'lxml')
+                                        for script in soup(["script", "style", "nav", "footer", "header"]):
+                                            script.decompose()
+                                        body_text = soup.get_text(separator=' ', strip=True)[:100000]
                                 finally:
                                     response.close()
                                     response.release_conn()
                             except Exception as e:
                                 logging.warning(f"Error fetching MinIO for {doc['url']}: {e}")
+                        
+                        # Calculate Readability
+                        readability = 0.0
+                        if body_text and len(body_text) > 100:
+                            try:
+                                readability = textstat.flesch_reading_ease(body_text)
+                            except:
+                                readability = 0.0
                         
                         doc['body_text'] = body_text
                         if 'raw_html_path' in doc:
@@ -251,6 +238,14 @@ async def main():
                             doc['crawled_at'] = doc['crawled_at'].timestamp()
 
                         documents_batch.append(doc)
+                        readability_updates.append((readability, doc['id']))
+
+                    # Batch update readability in Postgres
+                    if readability_updates:
+                        try:
+                            await connection.executemany("UPDATE crawled_pages SET readability_score = $1 WHERE id = $2", readability_updates)
+                        except Exception as e:
+                            logging.error(f"Failed to update readability scores: {e}")
 
                     await meili_client.index(INDEX_NAME).add_documents(documents_batch)
                     

@@ -524,6 +524,17 @@ class WebCrawler:
                 else:
                     console.print(f"[bold red]Failed {norm_url} after {fails} attempts: {e}[/bold red]")
                     await self.redis.lpush('failed_urls', norm_url)
+                    
+                    # Soft Delete in DB (Mark as dead)
+                    if self.db_pool:
+                        try:
+                            async with self.db_pool.acquire() as conn:
+                                await conn.execute(
+                                    "UPDATE crawled_pages SET deleted_at = CURRENT_TIMESTAMP WHERE url = $1", 
+                                    norm_url
+                                )
+                        except Exception as dbe:
+                            console.print(f"[red]Failed to soft-delete {norm_url}: {dbe}[/red]")
 
     async def _discover_sitemap(self, domain: str):
         pass
