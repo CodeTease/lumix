@@ -3,7 +3,7 @@ module teasersearch-backend
 go 1.23.0
 
 require (
-	github.com/jackc/pgx/v5 v5.5.0
+	github.com/jackc/pgx/v5 v5.5.4
 	github.com/labstack/echo-contrib v0.17.4
 	github.com/labstack/echo/v4 v4.13.3
 	github.com/meilisearch/meilisearch-go v0.34.1
