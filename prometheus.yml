@@ -27,6 +27,7 @@ scrape_configs:
 
   - job_name: 'meilisearch'
     metrics_path: '/metrics'
+    bearer_token: 'masterKey' # REPLACE THIS WITH YOUR ACTUAL MEILI_MASTER_KEY
     static_configs:
       - targets: ['meilisearch:7700']
 
