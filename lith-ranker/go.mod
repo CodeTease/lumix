@@ -2,7 +2,7 @@ module lith-ranker
 
 go 1.24.0
 
-require github.com/jackc/pgx/v5 v5.5.0
+require github.com/jackc/pgx/v5 v5.5.4
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
