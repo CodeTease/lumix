@@ -191,14 +191,14 @@ async def main():
                 except Exception as e:
                     logging.warning(f"Failed to update queue depth metric: {e}")
 
-                query = f"""
+                query = """
                     SELECT id, url, title, meta_description, raw_html_path, domain, language, crawled_at, lith_score
                     FROM crawled_pages
                     WHERE (indexed_at IS NULL OR crawled_at > indexed_at)
                       AND deleted_at IS NULL
-                    LIMIT {BATCH_SIZE};
+                    LIMIT $1;
                 """
-                records = await connection.fetch(query)
+                records = await connection.fetch(query, BATCH_SIZE)
 
                 if records:
                     logging.info(
@@ -257,7 +257,7 @@ async def main():
                         if body_text and len(body_text) > 100:
                             try:
                                 readability = textstat.flesch_reading_ease(body_text)
-                            except:
+                            except Exception:
                                 readability = 0.0
 
                         doc["body_text"] = body_text
@@ -291,9 +291,6 @@ async def main():
                     )
                     logging.info(f"Indexed {len(indexed_ids)} pages.")
                     INDEXED_PAGES.inc(len(indexed_ids))
-                else:
-                    # No new pages, maybe good time to cleanup or sleep
-                    pass
 
             # 2. Cleanup Task (Periodic)
             now = time.time()
