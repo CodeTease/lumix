@@ -191,14 +191,14 @@ async def main():
                 except Exception as e:
                     logging.warning(f"Failed to update queue depth metric: {e}")
 
-                query = f"""
+                query = """
                     SELECT id, url, title, meta_description, raw_html_path, domain, language, crawled_at, lith_score
                     FROM crawled_pages
                     WHERE (indexed_at IS NULL OR crawled_at > indexed_at)
                       AND deleted_at IS NULL
-                    LIMIT {BATCH_SIZE};
+                    LIMIT $1;
                 """
-                records = await connection.fetch(query)
+                records = await connection.fetch(query, BATCH_SIZE)
 
                 if records:
                     logging.info(
