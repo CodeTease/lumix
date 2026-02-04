@@ -257,7 +257,7 @@ async def main():
                         if body_text and len(body_text) > 100:
                             try:
                                 readability = textstat.flesch_reading_ease(body_text)
-                            except:
+                            except Exception:
                                 readability = 0.0
 
                         doc["body_text"] = body_text
