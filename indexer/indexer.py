@@ -30,6 +30,9 @@ INDEXED_PAGES = Counter("indexed_pages_total", "Total pages indexed")
 
 # --- 3. Config ---
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL or not DATABASE_URL.strip():
+    logging.error("DATABASE_URL environment variable is not set or empty.")
+    raise RuntimeError("DATABASE_URL environment variable must be set and non-empty")
 MEILI_HOST = os.getenv("MEILI_HOST")
 MEILI_API_KEY = os.getenv("MEILI_API_KEY")
 
