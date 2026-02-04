@@ -30,8 +30,19 @@ INDEXED_PAGES = Counter("indexed_pages_total", "Total pages indexed")
 
 # --- 3. Config ---
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL or not DATABASE_URL.strip():
+    logging.error("DATABASE_URL environment variable is not set or empty.")
+    raise RuntimeError("DATABASE_URL environment variable must be set and non-empty")
 MEILI_HOST = os.getenv("MEILI_HOST")
 MEILI_API_KEY = os.getenv("MEILI_API_KEY")
+
+# Validate MeiliSearch API key to ensure it is present and not empty.
+if MEILI_API_KEY is None or not str(MEILI_API_KEY).strip():
+    logging.error(
+        "MEILI_API_KEY environment variable is not set or is empty. "
+        "Please configure a valid MeiliSearch API key."
+    )
+    raise ValueError("Invalid configuration: MEILI_API_KEY is required and cannot be empty.")
 
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
@@ -114,13 +125,16 @@ async def main():
         # --- MinIO Connection ---
         if MINIO_ACCESS_KEY and MINIO_SECRET_KEY:
             try:
-                logging.info(f"Connecting to MinIO at {MINIO_ENDPOINT}...")
+                logging.info(
+                    f"Connecting to MinIO at {MINIO_ENDPOINT} "
+                    f"(secure={'enabled' if MINIO_SECURE else 'disabled'})..."
+                )
                 # Minio client is synchronous
                 minio_client = Minio(
                     MINIO_ENDPOINT,
                     access_key=MINIO_ACCESS_KEY,
                     secret_key=MINIO_SECRET_KEY,
-                    secure=False,
+                    secure=MINIO_SECURE,
                 )
             except Exception as e:
                 logging.error(f"MinIO connection error: {e}")
