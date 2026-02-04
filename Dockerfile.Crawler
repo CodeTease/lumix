@@ -1,7 +1,5 @@
-# Sử dụng image Python nhẹ
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Cài đặt các gói hệ thống cần thiết cho C/C++ build và libpq (PostgreSQL)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
@@ -9,24 +7,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Thiết lập thư mục làm việc
 WORKDIR /app
 
-# Copy requirements trước
 COPY crawler/requirements.txt .
 
-# Cài đặt thư viện Python từ requirements.txt
-# (Bao gồm asyncpg, fasttext-wheel, minio, v.v.)
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Tải model FastText từ Teaserverse Public Asset
 RUN curl -fsSL -o /var/local/lid.176.bin https://cdn.teaserverse.online/codetease/lumix/lid.176.bin 
 
-# Copy toàn bộ mã nguồn crawler
 COPY crawler.py .
 COPY crawler/schema.sql .
 COPY crawler/config.json .
 COPY crawler/.gitignore .
 
-# Lệnh mặc định để chạy crawler
 CMD ["python", "crawler.py"]

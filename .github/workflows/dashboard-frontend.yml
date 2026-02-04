@@ -20,7 +20,7 @@ jobs:
     - name: Set up Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '22' # Next.js mới nhất yêu cầu Node >=20.9.0
+        node-version: '22' 
         cache: 'npm'
         cache-dependency-path: dashboard-frontend/package-lock.json
 

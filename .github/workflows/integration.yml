@@ -11,7 +11,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: integration # Required reviewers
     
-    # Tạo một file .env giả để các service không bị lỗi thiếu biến môi trường
     env:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
@@ -26,39 +25,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # BƯỚC QUAN TRỌNG: Thiết lập Buildx để caching Docker layers
-      # Điều này giúp các lần chạy sau chỉ build lại những gì thay đổi, 
-      # giúp tiết kiệm thời gian và tài nguyên CPU/RAM RẤT NHIỀU.
       - name: Set up Docker Buildx and Cache
         uses: docker/setup-buildx-action@v3
 
-      # BƯỚC 1: Build & Up (Bao gồm cả infra và app)
       - name: Build and Start All Services
         run: |
-          # Dùng --force-recreate để đảm bảo tất cả được dựng mới
           docker compose -f docker-compose.yml up -d --build --force-recreate
-      
-      # BƯỚC 2: Kiểm tra nhanh (Quick Health Check)
-      # Chúng ta không cần đợi Full Integration. Chỉ cần đợi 30 giây
-      # để xem có service nào bị Crash Loop ngay khi khởi động không.
+
       - name: Wait for initial startup (30s)
         run: sleep 30
 
-      # BƯỚC 3: Kiểm tra Log và Tình trạng
       - name: Check Service Health Status
-        # Lệnh này sẽ kiểm tra xem có service nào bị lỗi (Exited) hay không.
-        # Nếu có service nào bị crash (Exited > 0), lệnh này sẽ fail job.
         run: |
           docker compose ps
-          # Kiểm tra xem có container nào bị thoát ra không (Exited)
           if docker compose ps --filter "status=exited" | grep -q "Exited"; then
             echo "ERROR: One or more services failed to start!"
             docker compose logs
             exit 1
           fi
 
-      # BƯỚC 4: Dọn dẹp (Cực kỳ quan trọng)
-      # Tắt và xóa tất cả container, networks, và volumes (data cache)
       - name: Cleanup Containers
-        if: always() # Luôn chạy, kể cả khi bước trên fail
+        if: always() 
         run: docker compose -f docker-compose.yml down -v --rmi all
