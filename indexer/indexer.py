@@ -114,13 +114,16 @@ async def main():
         # --- MinIO Connection ---
         if MINIO_ACCESS_KEY and MINIO_SECRET_KEY:
             try:
-                logging.info(f"Connecting to MinIO at {MINIO_ENDPOINT}...")
+                logging.info(
+                    f"Connecting to MinIO at {MINIO_ENDPOINT} "
+                    f"(secure={'enabled' if MINIO_SECURE else 'disabled'})..."
+                )
                 # Minio client is synchronous
                 minio_client = Minio(
                     MINIO_ENDPOINT,
                     access_key=MINIO_ACCESS_KEY,
                     secret_key=MINIO_SECRET_KEY,
-                    secure=False,
+                    secure=MINIO_SECURE,
                 )
             except Exception as e:
                 logging.error(f"MinIO connection error: {e}")
