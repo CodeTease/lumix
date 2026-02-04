@@ -291,9 +291,6 @@ async def main():
                     )
                     logging.info(f"Indexed {len(indexed_ids)} pages.")
                     INDEXED_PAGES.inc(len(indexed_ids))
-                else:
-                    # No new pages, maybe good time to cleanup or sleep
-                    pass
 
             # 2. Cleanup Task (Periodic)
             now = time.time()
