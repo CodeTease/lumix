@@ -33,6 +33,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 MEILI_HOST = os.getenv("MEILI_HOST")
 MEILI_API_KEY = os.getenv("MEILI_API_KEY")
 
+# Validate MeiliSearch API key to ensure it is present and not empty.
+if MEILI_API_KEY is None or not str(MEILI_API_KEY).strip():
+    logging.error(
+        "MEILI_API_KEY environment variable is not set or is empty. "
+        "Please configure a valid MeiliSearch API key."
+    )
+    raise ValueError("Invalid configuration: MEILI_API_KEY is required and cannot be empty.")
+
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
